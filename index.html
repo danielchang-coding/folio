@@ -314,7 +314,7 @@
     border-radius: var(--radius);
     padding: 20px;
   }
-  .donut-wrap { position: relative; width: 120px; height: 120px; margin: 16px auto; }
+  .donut-wrap { position: relative; width: 160px; height: 160px; margin: 16px auto; }
   .donut-center {
     position: absolute;
     inset: 0;
@@ -1191,7 +1191,7 @@ function renderAllocation() {
   function makeDonut(title, items, centerLabel) {
     const total = items.reduce((s, i) => s + i.value, 0) || 1;
     let offset = 0;
-    const r = 54, cx = 60, cy = 60, stroke = 16;
+    const r = 70, cx = 80, cy = 80, stroke = 20;
     const circ = 2 * Math.PI * r;
     let paths = '';
     let legend = '';
@@ -1207,7 +1207,7 @@ function renderAllocation() {
     return `<div class="alloc-card">
       <div class="section-title">${title}</div>
       <div class="donut-wrap">
-        <svg viewBox="0 0 120 120" width="120" height="120">${paths}</svg>
+        <svg viewBox="0 0 160 160" width="160" height="160">${paths}</svg>
         <div class="donut-center"><strong>${centerLabel}</strong>items</div>
       </div>
       <div class="legend">${legend}</div>
