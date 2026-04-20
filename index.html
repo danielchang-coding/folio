@@ -808,9 +808,9 @@ async function syncAll() {
 
 async function fetchExchangeRate() {
   try {
-    const r = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/USDTWD=X?interval=1d&range=1d');
+    const r = await fetch(`https://finnhub.io/api/v1/forex/rates?base=USD&token=${FINNHUB_KEY}`);
     const d = await r.json();
-    usdToTwd = d.chart.result[0].meta.regularMarketPrice || 32;
+    usdToTwd = d.quote['TWD'] || 32;
   } catch { usdToTwd = 32; }
 }
 
