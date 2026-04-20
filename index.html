@@ -985,7 +985,7 @@ function getRangeDays(range) {
 function render() {
   renderSummary();
   renderReturnBadges();
-  renderChart();
+  renderChart(); // async, runs in background
   renderAllocation();
   renderHoldings();
   renderTransactions();
@@ -1058,11 +1058,9 @@ function renderReturnBadges() {
   document.getElementById('returnBadges').innerHTML = html;
 }
 
-function renderChart() {
+async function renderChart() {
   const ctx = document.getElementById('perfChart').getContext('2d');
-
-  // Build time series from transactions
-  const points = buildChartPoints(activeTab, activeRange);
+  const points = await buildChartPoints(activeTab, activeRange);
 
   if (perfChart) perfChart.destroy();
 
@@ -1122,7 +1120,7 @@ function renderChart() {
   });
 }
 
-function buildChartPoints(market, range) {
+async function buildChartPoints(market, range) {
   const txs = market === 'combined'
     ? state.transactions
     : state.transactions.filter(t => t.market === market);
@@ -1135,41 +1133,128 @@ function buildChartPoints(market, range) {
     ? new Date(now - rangeDays * 86400000)
     : new Date(Math.min(...txs.map(t => new Date(t.date))));
 
-  // Generate monthly points
-  const points = [];
-  let cursor = new Date(startDate);
-  cursor.setDate(1);
+  // Use daily for 1M/3M/6M/1Y, monthly for ALL
+  const resolution = range === 'ALL' ? 'M' : 'D';
 
-  while (cursor <= now) {
-    const label = cursor.toLocaleDateString('en', {month: 'short', year: '2-digit'});
-    const pointDate = new Date(cursor);
+  // Get unique US tickers
+  const tickers = [...new Set(
+    txs.filter(t => t.type === 'BUY' && !isTW(t.ticker)).map(t => t.ticker)
+  )];
 
-    // Calculate portfolio value at this point using historical transactions
-    const pastTxs = txs.filter(t => new Date(t.date) <= pointDate);
-    if (pastTxs.length > 0) {
-      let cost = 0, value = 0;
-      const tickerShares = {};
-      pastTxs.filter(t => t.type === 'BUY').forEach(t => {
-        tickerShares[t.ticker] = (tickerShares[t.ticker] || 0) + +t.shares;
-        cost += +t.shares * +t.price;
-      });
-      pastTxs.filter(t => t.type === 'SELL').forEach(t => {
-        const s = Math.min(tickerShares[t.ticker] || 0, +t.shares);
-        tickerShares[t.ticker] = (tickerShares[t.ticker] || 0) - s;
-      });
-      // Use current prices as approximation for historical (ideally you'd have historical prices)
-      for (const [ticker, shares] of Object.entries(tickerShares)) {
-        if (shares > 0) value += toDisplayCurrency(shares * (state.prices[ticker] || 0),
-          txs.find(t => t.ticker === ticker)?.market || 'US');
+  // Fetch historical prices from Finnhub
+  const historicalPrices = {}; // {ticker: [{t, c}]}
+  const fromTs = Math.floor(startDate.getTime() / 1000);
+  const toTs = Math.floor(now.getTime() / 1000);
+
+  await Promise.all(tickers.map(async ticker => {
+    try {
+      const r = await fetch(
+        `https://finnhub.io/api/v1/stock/candle?symbol=${ticker}&resolution=${resolution}&from=${fromTs}&to=${toTs}&token=${FINNHUB_KEY}`
+      );
+      const d = await r.json();
+      if (d.s === 'ok') {
+        historicalPrices[ticker] = {};
+        d.t.forEach((ts, i) => {
+          historicalPrices[ticker][ts] = d.c[i];
+        });
       }
-      cost = toDisplayCurrency(cost, 'US'); // simplified
-      if (cost > 0) points.push({ label, returnPct: ((value - cost) / cost) * 100 });
-    }
+    } catch {}
+  }));
 
-    cursor.setMonth(cursor.getMonth() + 1);
+  // Build time series points
+  const points = [];
+
+  if (resolution === 'D') {
+    // Daily: iterate each day in range
+    let cursor = new Date(startDate);
+    while (cursor <= now) {
+      const dayOfWeek = cursor.getDay();
+      // Skip weekends
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+        const label = cursor.toLocaleDateString('en', { month: 'short', day: 'numeric' });
+        const pointTs = Math.floor(cursor.getTime() / 1000);
+        const pastTxs = txs.filter(t => new Date(t.date) <= cursor);
+
+        if (pastTxs.length > 0) {
+          let cost = 0, value = 0;
+          const tickerShares = {};
+          const tickerMarket = {};
+
+          pastTxs.filter(t => t.type === 'BUY').forEach(t => {
+            tickerShares[t.ticker] = (tickerShares[t.ticker] || 0) + +t.shares;
+            tickerMarket[t.ticker] = t.market;
+            cost += toDisplayCurrency(+t.shares * +t.price, t.market);
+          });
+          pastTxs.filter(t => t.type === 'SELL').forEach(t => {
+            tickerShares[t.ticker] = Math.max(0, (tickerShares[t.ticker] || 0) - +t.shares);
+          });
+
+          for (const [ticker, shares] of Object.entries(tickerShares)) {
+            if (shares <= 0) continue;
+            const mkt = tickerMarket[ticker];
+            let price = state.prices[ticker] || 0;
+            if (historicalPrices[ticker]) {
+              const timestamps = Object.keys(historicalPrices[ticker]).map(Number);
+              if (timestamps.length) {
+                const closest = timestamps.reduce((a, b) =>
+                  Math.abs(b - pointTs) < Math.abs(a - pointTs) ? b : a, timestamps[0]);
+                price = historicalPrices[ticker][closest] || price;
+              }
+            }
+            value += toDisplayCurrency(shares * price, mkt);
+          }
+
+          if (cost > 0) points.push({ label, returnPct: ((value - cost) / cost) * 100 });
+        }
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  } else {
+    // Monthly: iterate each month
+    let cursor = new Date(startDate);
+    cursor.setDate(1);
+    while (cursor <= now) {
+      const label = cursor.toLocaleDateString('en', { month: 'short', year: '2-digit' });
+      const pointTs = Math.floor(cursor.getTime() / 1000);
+      const pastTxs = txs.filter(t => new Date(t.date) <= cursor);
+
+      if (pastTxs.length > 0) {
+        let cost = 0, value = 0;
+        const tickerShares = {};
+        const tickerMarket = {};
+
+        pastTxs.filter(t => t.type === 'BUY').forEach(t => {
+          tickerShares[t.ticker] = (tickerShares[t.ticker] || 0) + +t.shares;
+          tickerMarket[t.ticker] = t.market;
+          cost += toDisplayCurrency(+t.shares * +t.price, t.market);
+        });
+        pastTxs.filter(t => t.type === 'SELL').forEach(t => {
+          tickerShares[t.ticker] = Math.max(0, (tickerShares[t.ticker] || 0) - +t.shares);
+        });
+
+        for (const [ticker, shares] of Object.entries(tickerShares)) {
+          if (shares <= 0) continue;
+          const mkt = tickerMarket[ticker];
+          let price = state.prices[ticker] || 0;
+          if (historicalPrices[ticker]) {
+            const timestamps = Object.keys(historicalPrices[ticker]).map(Number);
+            if (timestamps.length) {
+              const closest = timestamps.reduce((a, b) =>
+                Math.abs(b - pointTs) < Math.abs(a - pointTs) ? b : a, timestamps[0]);
+              price = historicalPrices[ticker][closest] || price;
+            }
+          }
+          value += toDisplayCurrency(shares * price, mkt);
+        }
+
+        if (cost > 0) points.push({ label, returnPct: ((value - cost) / cost) * 100 });
+      }
+
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
   }
 
-  return points.length ? points : [{label: 'No data', returnPct: 0}];
+  return points.length ? points : [{ label: 'No data', returnPct: 0 }];
 }
 
 function renderAllocation() {
@@ -1318,13 +1403,13 @@ function setTab(tab) {
   render();
 }
 
-function setRange(range) {
+async function setRange(range) {
   activeRange = range;
   document.querySelectorAll('.range-btn').forEach(b => {
     b.classList.remove('active');
     if (b.textContent === range) b.classList.add('active');
   });
-  renderChart();
+  await renderChart();
 }
 
 function setCurrency(cur) {
