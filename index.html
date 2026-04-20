@@ -823,20 +823,24 @@ async function loadFromSheet() {
 
 async function saveToSheet(tx) {
   if (!SHEET_URL) return;
-  await fetch(SHEET_URL, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({action: 'add', transaction: tx})
+  const params = new URLSearchParams({
+    action: 'add',
+    id: tx.id,
+    market: tx.market,
+    type: tx.type,
+    ticker: tx.ticker,
+    shares: tx.shares,
+    price: tx.price,
+    date: tx.date,
+    note: tx.note || ''
   });
+  await fetch(SHEET_URL + '?' + params.toString());
 }
 
 async function deleteFromSheet(id) {
   if (!SHEET_URL) return;
-  await fetch(SHEET_URL, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({action: 'delete', id})
-  });
+  const params = new URLSearchParams({ action: 'delete', id });
+  await fetch(SHEET_URL + '?' + params.toString());
 }
 
 async function refreshPrices() {
