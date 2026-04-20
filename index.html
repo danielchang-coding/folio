@@ -314,7 +314,7 @@
     border-radius: var(--radius);
     padding: 20px;
   }
-  .donut-wrap { position: relative; width: 160px; height: 160px; margin: 16px auto; }
+  .donut-wrap { position: relative; width: 128px; height: 128px; margin: 16px auto; }
   .donut-center {
     position: absolute;
     inset: 0;
@@ -613,7 +613,7 @@
 <!-- Add Transaction Modal -->
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal">
-    <div class="modal-title">Add Transaction</div>
+    <div class="modal-title" id="modalTitle">Add Transaction</div>
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">Market</label>
@@ -656,7 +656,7 @@
     </div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeModal()">Cancel</button>
-      <button class="btn-primary" onclick="submitTransaction()">Add Transaction</button>
+      <button class="btn-primary" id="submitBtn" onclick="submitTransaction()">Add Transaction</button>
     </div>
   </div>
 </div>
@@ -750,6 +750,7 @@ let activeTab = 'combined';
 let activeRange = 'ALL';
 let usdToTwd = 32; // fallback, refreshed on sync
 let perfChart = null;
+let editingId = null;
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
 let state = {
@@ -1191,7 +1192,7 @@ function renderAllocation() {
   function makeDonut(title, items, centerLabel) {
     const total = items.reduce((s, i) => s + i.value, 0) || 1;
     let offset = 0;
-    const r = 70, cx = 80, cy = 80, stroke = 20;
+    const r = 52, cx = 64, cy = 64, stroke = 16;
     const circ = 2 * Math.PI * r;
     let paths = '';
     let legend = '';
@@ -1207,7 +1208,7 @@ function renderAllocation() {
     return `<div class="alloc-card">
       <div class="section-title">${title}</div>
       <div class="donut-wrap">
-        <svg viewBox="0 0 160 160" width="160" height="160">${paths}</svg>
+        <svg viewBox="0 0 128 128" width="128" height="128" style="overflow:visible">${paths}</svg>
         <div class="donut-center"><strong>${centerLabel}</strong>items</div>
       </div>
       <div class="legend">${legend}</div>
@@ -1289,13 +1290,13 @@ function renderTransactions() {
       ? fmtNum(+tx.price, tx.market)
       : fmtNum(+tx.shares * +tx.price, tx.market);
 
-    html += `<div class="tx-row">
+    html += `<div class="tx-row" onclick="openEditModal('${tx.id}')" style="cursor:pointer">
       <span class="tx-date">${tx.date}</span>
       <span><span class="tx-type-badge ${badgeClass}">${tx.type}</span> ${flag} ${tx.ticker || 'Cash'}</span>
       <span>${detail}</span>
       <span>${total}</span>
       <span class="holding-ticker">${tx.note || ''}</span>
-      <button class="delete-tx" onclick="deleteTx('${tx.id}')">✕</button>
+      <button class="delete-tx" onclick="event.stopPropagation();deleteTx('${tx.id}')">✕</button>
     </div>`;
   });
 
@@ -1336,8 +1337,35 @@ function setCurrency(cur) {
 }
 
 function openModal() {
-  document.getElementById('modalOverlay').classList.add('open');
+  editingId = null;
+  document.getElementById('modalTitle').textContent = 'Add Transaction';
+  document.getElementById('submitBtn').textContent = 'Add Transaction';
+  document.getElementById('txMarket').value = 'US';
+  document.getElementById('txType').value = 'BUY';
+  document.getElementById('txTicker').value = '';
+  document.getElementById('txShares').value = '';
+  document.getElementById('txPrice').value = '';
+  document.getElementById('txNote').value = '';
+  onTypeChange();
   setDefaultDate();
+  document.getElementById('modalOverlay').classList.add('open');
+}
+
+function openEditModal(id) {
+  const tx = state.transactions.find(t => t.id === id);
+  if (!tx) return;
+  editingId = id;
+  document.getElementById('modalTitle').textContent = 'Edit Transaction';
+  document.getElementById('submitBtn').textContent = 'Update Transaction';
+  document.getElementById('txMarket').value = tx.market;
+  document.getElementById('txType').value = tx.type;
+  document.getElementById('txTicker').value = tx.ticker;
+  document.getElementById('txShares').value = tx.shares;
+  document.getElementById('txPrice').value = tx.price;
+  document.getElementById('txDate').value = tx.date;
+  document.getElementById('txNote').value = tx.note || '';
+  onTypeChange();
+  document.getElementById('modalOverlay').classList.add('open');
 }
 
 function closeModal() {
@@ -1370,34 +1398,39 @@ async function submitTransaction() {
 
   if (!price || !date) { showToast('Please fill in price and date'); return; }
 
-  const tx = {
-    id: Date.now().toString(),
-    market, type, ticker, shares, price, date, note
-  };
-
-  state.transactions.push(tx);
-  closeModal();
-  render();
-
-  try {
-    await saveToSheet(tx);
-    showToast('✓ Transaction saved');
-    // Refresh price for new ticker
-    if (type === 'BUY' || type === 'SELL') {
+  if (editingId) {
+    // ── Edit existing ──
+    const idx = state.transactions.findIndex(t => t.id === editingId);
+    const updatedTx = { id: editingId, market, type, ticker, shares, price, date, note };
+    state.transactions[idx] = updatedTx;
+    closeModal();
+    render();
+    try {
+      await deleteFromSheet(editingId);
+      await saveToSheet(updatedTx);
+      showToast('✓ Transaction updated');
       await refreshPrices();
       render();
+    } catch {
+      showToast('Updated locally — sheet sync failed');
     }
-  } catch {
-    showToast('Saved locally — sheet sync failed');
+  } else {
+    // ── New transaction ──
+    const tx = { id: Date.now().toString(), market, type, ticker, shares, price, date, note };
+    state.transactions.push(tx);
+    closeModal();
+    render();
+    try {
+      await saveToSheet(tx);
+      showToast('✓ Transaction saved');
+      if (type === 'BUY' || type === 'SELL') {
+        await refreshPrices();
+        render();
+      }
+    } catch {
+      showToast('Saved locally — sheet sync failed');
+    }
   }
-
-  // Reset form
-  document.getElementById('txTicker').value = '';
-  document.getElementById('txShares').value = '';
-  document.getElementById('txPrice').value = '';
-  document.getElementById('txNote').value = '';
-  document.getElementById('txType').value = 'BUY';
-  onTypeChange();
 }
 
 async function deleteTx(id) {
