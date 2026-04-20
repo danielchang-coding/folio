@@ -1148,15 +1148,11 @@ async function buildChartPoints(market, range) {
 
   await Promise.all(tickers.map(async ticker => {
     try {
-      const r = await fetch(
-        `https://finnhub.io/api/v1/stock/candle?symbol=${ticker}&resolution=${resolution}&from=${fromTs}&to=${toTs}&token=${FINNHUB_KEY}`
-      );
+      const params = new URLSearchParams({ action: 'history', ticker, resolution });
+      const r = await fetch(SHEET_URL + '?' + params.toString());
       const d = await r.json();
-      if (d.s === 'ok') {
-        historicalPrices[ticker] = {};
-        d.t.forEach((ts, i) => {
-          historicalPrices[ticker][ts] = d.c[i];
-        });
+      if (d.success) {
+        historicalPrices[ticker] = d.prices;
       }
     } catch {}
   }));
