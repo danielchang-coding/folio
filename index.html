@@ -742,8 +742,6 @@
 <script>
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const FINNHUB_KEY = 'd7iltgpr01qn2qauife0d7iltgpr01qn2qauifeg';
-const TWSE_PROXY  = 'https://query1.finance.yahoo.com/v8/finance/chart/';
-
 let SHEET_URL = localStorage.getItem('folio_sheet_url') || '';
 let displayCurrency = localStorage.getItem('folio_currency') || 'TWD';
 let activeTab = 'combined';
@@ -810,7 +808,7 @@ async function fetchExchangeRate() {
   try {
     const r = await fetch('https://open.er-api.com/v6/latest/USD');
     const d = await r.json();
-    usdToTwd = d.quote['TWD'] || 32;
+    usdToTwd = d.rates['TWD'] || 32;
   } catch { usdToTwd = 32; }
 }
 
@@ -853,8 +851,7 @@ async function refreshPrices() {
   await Promise.all(tickers.map(async ticker => {
     try {
       if (isTW(ticker)) {
-        // Taiwan stocks not on Finnhub free tier — use hardcoded fallback for now
-        // Price must be entered manually when adding transaction
+        // Taiwan stocks: keep last known price or fall back to 0
         state.prices[ticker] = state.prices[ticker] || 0;
       } else {
         // Finnhub for US stocks
